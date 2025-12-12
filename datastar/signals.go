@@ -146,9 +146,19 @@ func ReadSignalsWithLimit(r *http.Request,signals any,maxUploadSize int64) error
 	if r.Method == "GET" {
 		return errors.New("does not work with get requests")
 	}
-	limitedReader := io.LimitReader(r.Body, maxUploadSize)
 
-	buf := new(bytes.Buffer)
+	contentLength := r.Header.Get("Content-Length")
+	if contentLength!="" {
+		size, err := strconv.ParseInt(contentLength, 10, 64)
+		if err==nil && size > maxUploadSize {
+			_, _ = io.Copy(io.Discard, r.Body)
+			return ErrorBodyExceedsMaxSize
+		}
+	} 
+
+	limitedReader := io.LimitReader(r.Body, maxUploadSize)
+	buf := bytebufferpool.Get()
+	defer bytebufferpool.Put(buf)
 	_,err:=buf.ReadFrom(limitedReader)
 	defer r.Body.Close()
 	if err!=nil { 
@@ -165,6 +175,5 @@ func ReadSignalsWithLimit(r *http.Request,signals any,maxUploadSize int64) error
 	if err = json.Unmarshal(dsInput, signals); err != nil {
 		return fmt.Errorf("failed to unmarshal: %w", err)
 	}
-
 	return nil
 }
