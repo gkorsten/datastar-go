@@ -3,13 +3,18 @@ package datastar
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/valyala/bytebufferpool"
 )
+
+// ErrorBodyExceedsMaxSize if body exceeds given size
+var ErrorBodyExceedsMaxSize = errors.New("body exceeds max size")
 
 // patchSignalsOptions holds configuration options for patching signals.
 type patchSignalsOptions struct {
@@ -116,5 +121,50 @@ func ReadSignals(r *http.Request, signals any) error {
 	if err := json.Unmarshal(dsInput, signals); err != nil {
 		return fmt.Errorf("failed to unmarshal: %w", err)
 	}
+	return nil
+}
+
+// ReadSignalsWithLimit extracts Datastar signals from a PUT or POST request
+// and unmarshals it into a signals struct.
+//
+// It also expects a maxUploadSize in bits.
+// If the request body is bigger than the maxUploadSize, it will error with ErrorBodyExceedsMaxSize.
+//
+// Example: 
+//
+//  const maxUploadSize = 1 * 1024 * 1024 // 1MB
+//	err := datastar.ReadSignalsWithLimit(r,&signal,maxUploadSize)
+//	if err!=nil {
+//		if errors.Is(err,datastar.ErrorBodyExceedsMaxSize) {
+//			http.Error(w, fmt.Sprintf("Request body exceeds the limit of %v", maxUploadSize), http.StatusRequestEntityTooLarge)
+//			return
+//		}
+//		http.Error(w, "Internal server error.", http.StatusInternalServerError)
+//		return
+//  }
+func ReadSignalsWithLimit(r *http.Request,signals any,maxUploadSize int64) error {
+	if r.Method == "GET" {
+		return errors.New("does not work with get requests")
+	}
+	limitedReader := io.LimitReader(r.Body, maxUploadSize)
+
+	buf := new(bytes.Buffer)
+	_,err:=buf.ReadFrom(limitedReader)
+	defer r.Body.Close()
+	if err!=nil { 
+		return fmt.Errorf("failed to read body: %w", err)
+	}
+
+	oneByte := make([]byte, 1)
+	if _, err := r.Body.Read(oneByte); err != io.EOF {
+		_, _ = io.Copy(io.Discard, r.Body)
+		return ErrorBodyExceedsMaxSize
+	}
+
+	dsInput := buf.Bytes()
+	if err = json.Unmarshal(dsInput, signals); err != nil {
+		return fmt.Errorf("failed to unmarshal: %w", err)
+	}
+
 	return nil
 }
